@@ -11,8 +11,6 @@ DOCKERFILE     ?= $(DOCKER_CONTEXT)/Dockerfile
 ENV_FILE       ?= $(DOCKER_CONTEXT)/env
 
 # defining CONTAINER_IMAGE
-IMAGE_HUB   ?= registry.trt8.jus.br
-#IMAGE_NAME  ?= $(shell git remote -v | awk '/^origin/ && NR==1 {print $$2}' | sed -ne
 IMAGE_NAME  ?= $(shell git remote get-url origin 2>/dev/null | sed -ne \
 			   's,\(http[s]:\/\/\|git@\)[^:/]*[:/]\(.*\)\.git$$,\2,p')
 ifeq ($(strip $(IMAGE_NAME)),)
@@ -24,7 +22,11 @@ ifndef VERSION
 VERSION  := $(shell git rev-parse --short HEAD 2>/dev/null)
 endif
 
+ifdef IMAGE_HUB
 CONTAINER_IMAGE   := $(IMAGE_HUB)/$(IMAGE_NAME):$(VERSION)
+else
+CONTAINER_IMAGE   := $(IMAGE_NAME):$(VERSION)
+endif
 
 # -----------------------------------------------------------------------------
 BUILD_IMAGE ?= true

@@ -2,93 +2,78 @@
 kind: Deployment
 apiVersion: apps/v1
 metadata:
-  name: ${APPLICATION}-deploy
-  namespace: ${PACKAGE}
+  name: ${APPLICATION}
+  namespace: ${NAMESPACE}
   labels:
     app: ${APPLICATION}
-    env: ${ENVIRONMENT}
+    env: ${CLUSTER}
 spec:
   replicas: 1
   selector:
     matchLabels:
       app: ${APPLICATION}
-      env: ${ENVIRONMENT}
+      env: ${CLUSTER}
   template:
     metadata:
       labels:
         app: ${APPLICATION}
-        env: ${ENVIRONMENT}
+        env: ${CLUSTER}
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "1234"
     spec:
       containers:
       - name: ${APPLICATION}-container
-        image: ${DOCKER_IMAGE}
-        imagePullPolicy: Always
+        image: ${CONTAINER_IMAGE}
         ports:
-        - containerPort: ${APP_BACKEND_PORT}
+        - containerPort: ${CONTAINER_PORT}
         env:
-        - name: ENVIRONMENT
-          value: ${ENVIRONMENT}
+        - name: CLUSTER
+          value: ${CLUSTER}
         - name: APPLICATION
           value: ${APPLICATION}
         envFrom:
         - configMapRef:
             name: ${APPLICATION}-config
-        readinessProbe:
-          httpGet:
-            path: ${APP_ENDPOINT_PATH}
-            port: ${APP_BACKEND_PORT}
-          periodSeconds: 5
-          failureThreshold: 3
-          successThreshold: 3
-        livenessProbe:
-          httpGet:
-            path: ${APP_ENDPOINT_PATH}
-            port: ${APP_BACKEND_PORT}
-          initialDelaySeconds: 30
-          periodSeconds: 5
-          failureThreshold: 3
 
 ---
 kind: Service
 apiVersion: v1
 metadata:
   name: ${APPLICATION}-service
-  namespace: ${PACKAGE}
+  namespace: ${NAMESPACE}
   labels:
     app: ${APPLICATION}
-    env: ${ENVIRONMENT}
+    env: ${CLUSTER}
 spec:
   selector:
      app: ${APPLICATION}
-     env: ${ENVIRONMENT}
+     env: ${CLUSTER}
   ports:
     - name: http
-      port: ${APP_BACKEND_PORT}
+      port: ${CONTAINER_PORT}
 
 ---
 kind: Ingress
 apiVersion: extensions/v1beta1
 metadata:
   name: ${APPLICATION}-ingress
-  namespace: ${PACKAGE}
+  namespace: ${NAMESPACE}
   labels:
     app: ${APPLICATION}
-    env: ${ENVIRONMENT}
+    env: ${CLUSTER}
   annotations:
-    nginx.ingress.kubernetes.io/app-root: ${APP_ENDPOINT_PATH}
+    nginx.ingress.kubernetes.io/app-root: ${APPLICATION_PATH}
 spec:
   tls:
   - hosts:
-    - ${APP_ENDPOINT_URL}
+    - ${APPLICATION_URL}
   rules:
-  - host: ${APP_ENDPOINT_URL}
+  - host: ${APPLICATION_URL}
     http:
       paths:
-      - path: ${APP_ENDPOINT_PATH}
+      - path: ${APPLICATION_PATH}
         backend:
           serviceName: ${APPLICATION}-service
-          servicePort: ${APP_BACKEND_PORT}
+          servicePort: ${CONTAINER_PORT}
 

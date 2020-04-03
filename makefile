@@ -1,132 +1,104 @@
-# v2.3.2
-ifeq (,$(wildcard ./app.ini))
-$(error "The file app.ini was not found.  Please create it in the project root folder.")
-else
-include app.ini
+# v3.0.0
+.SILENT: image release docker-run validate
+.PHONY: image validate build
+
+ifneq (,$(wildcard ./config.ini))
+include config.ini
 endif
 
-ifeq ($(strip $(ENVIRONMENT)),)
-$(error "The ENVIRONMENT variable is undefined.  Please, define its value in app.ini file.")
-endif
-APPLICATION ?= $(shell basename $(CURDIR))
-NAMESPACE   ?= $(APPLICATION)
+DOCKER_CONTEXT ?= .
+DOCKERFILE     ?= $(DOCKER_CONTEXT)/Dockerfile
+ENV_FILE       ?= $(DOCKER_CONTEXT)/env
 
-ifeq (,$(wildcard ./.git))
-$(error "This project is still not version controlled.  Please initialize a git repo and add a remote to it.")
+# defining CONTAINER_IMAGE
+IMAGE_HUB   ?= registry.trt8.jus.br
+#IMAGE_NAME  ?= $(shell git remote -v | awk '/^origin/ && NR==1 {print $$2}' | sed -ne
+IMAGE_NAME  ?= $(shell git remote get-url origin 2>/dev/null | sed -ne \
+			   's,\(http[s]:\/\/\|git@\)[^:/]*[:/]\(.*\)\.git$$,\2,p')
+ifeq ($(strip $(IMAGE_NAME)),)
+$(error 'IMAGE_NAME is undefined.  Please clone a remote git repo.')
 endif
 
-VERSION     := $(shell git describe --tags --dirty --match="v*" 2> /dev/null || cat $(CURDIR)/.version 2> /dev/null)
+VERSION  := $(shell cat $(CURDIR)/.version 2>/dev/null || git describe --tags --dirty --match="v*" 2>/dev/null)
 ifndef VERSION
-VERSION     := latest
+VERSION  := $(shell git rev-parse --short HEAD 2>/dev/null)
 endif
 
-YAML_DIR       ?= ./yaml
-YAML_BUILD_DIR := ./.build_yaml
-YAML_FILES     := $(shell find $(YAML_DIR) -name '*.yaml' 2>/dev/null | sed 's:$(YAML_DIR)/::g')
+CONTAINER_IMAGE   := $(IMAGE_HUB)/$(IMAGE_NAME):$(VERSION)
 
-DOCKER_CONTEXT := .
-SRC_DIR        := $(DOCKER_CONTEXT)/src
-ENV_FILE       ?= $(SRC_DIR)/env
-DOCKERFILE     ?= $(SRC_DIR)/Dockerfile
+# -----------------------------------------------------------------------------
+BUILD_IMAGE ?= true
+ifdef BUILD_ARGS
+DOCKER_BUILD_ARGS := $(shell echo ' $(BUILD_ARGS)' | sed 's,\ , --build-arg ,g') -t $(CONTAINER_IMAGE)
+else
+DOCKER_BUILD_ARGS := -t $(CONTAINER_IMAGE)
+endif
 
-ENV_FLAGS := -e APPLICATION=$(APPLICATION) -e ENVIRONMENT=$(ENVIRONMENT)
+image: $(DOCKERFILE) ## generates the Docker image using a proper build command
+ifeq ($(BUILD_IMAGE), true)
+	$(info Building image $(CONTAINER_IMAGE))
+	docker image build -f $(DOCKERFILE) $(DOCKER_BUILD_ARGS) $(DOCKER_CONTEXT)
+else
+	$(info Using existing image $(CONTAINER_IMAGE))
+endif
+
+release: image ## build and pushes the Docker image to the image registry
+ifeq ($(BUILD_IMAGE), true)
+	docker image push $(CONTAINER_IMAGE)
+endif
+
+# -----------------------------------------------------------------------------
+APPLICATION ?= $(shell basename $(CURDIR))
+
+ENV_FLAGS   := -e APPLICATION=$(APPLICATION)
 ifneq (,$(wildcard $(ENV_FILE)))
 	ENV_FLAGS += --env-file=$(ENV_FILE)
 endif
 
-K8S_DEPLOY  ?= false
-BUILD_IMAGE ?= true
-IMAGE_HUB   ?= registry.trt8.jus.br
-IMAGE_NAME  ?= $(shell git remote -v | sed -ne '1 s:^origin.*gitlab\.trt8\.jus\.br[:/]\(.*\)\.git.*$$:\1:p')
-ifeq ($(strip $(IMAGE_NAME)),)
-$(error "The IMAGE_NAME is undefined.  Please, define it on app.ini or clone a repo from gitlab.trt8.jus.br.")
+docker-run: image ## runs the generated Docker image (with RUN_FLAGS, if specified)
+	docker run --rm --name $(APPLICATION)-container $(ENV_FLAGS) $(RUN_FLAGS) $(CONTAINER_IMAGE) # TODO ifndef RUN_FLAGS
+
+shell: image ## runs Docker image interactively with shell instead of entrypoint
+	docker run --rm --name $(APPLICATION)-container -it --entrypoint /bin/sh $(ENV_FLAGS) $(CONTAINER_IMAGE)
+
+# -----------------------------------------------------------------------------
+NAMESPACE         ?= $(APPLICATION)
+APPLICATION_URL   ?= $(APPLICATION).trt8.jus.br
+APPLICATION_PATH  ?= /
+
+YAML_DIR       := ./yaml
+YAML_BUILD_DIR := ./.build
+YAML_FILES     := $(shell find $(YAML_DIR) -type f \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null | sed 's,$(YAML_DIR)/,,g')
+
+AVAILABLE_VARS := CLUSTER NAMESPACE APPLICATION
+AVAILABLE_VARS += CONTAINER_IMAGE CONTAINER_PORT
+AVAILABLE_VARS += APPLICATION_URL APPLICATION_PATH
+
+SHELL_EXPORT   := $(foreach v,$(AVAILABLE_VARS),$(v)='$(firstword $($(v)))' )
+
+validate:
+# TODO talvez pegar o cluster de branch
+ifndef CLUSTER
+$(error CLUSTER is undefined! Impossible to deploy to Kubernetes)
+endif
+# TODO talvez pegar o namespace do dir acima da imagem
+ifndef CONTAINER_PORT
+$(error CONTAINER_PORT is undefined.)
 endif
 
-DOCKER_IMAGE := $(IMAGE_HUB)/$(IMAGE_NAME):$(VERSION)
-
-ifndef BUILD_ARGS
-DOCKER_BUILD_ARGS := -t $(DOCKER_IMAGE)
-else
-DOCKER_BUILD_ARGS := $(shell echo ' $(BUILD_ARGS)' | sed 's:\ : --build-arg :g') -t $(DOCKER_IMAGE)
-endif
-
-
-APPID := $(shell bash -c 'printf "%05d" $$RANDOM')-$(APPLICATION)
-
-AVAILABLE_VARS := APPLICATION NAMESPACE ENVIRONMENT DOCKER_IMAGE APPID
-AVAILABLE_VARS += APP_BACKEND_PORT APP_ENDPOINT_URL APP_ENDPOINT_PATH
-
-SHELL_EXPORT := $(foreach v,$(AVAILABLE_VARS),$(v)='$(firstword $($(v)))' )
-
-# ---------------------------------------------------------------------------------------------------------------------
-.PHONY: help image release docker-run image-start image-stop build-yaml deploy clean
-
-help:
-	@echo ''
-	@echo 'Usage:'
-	@echo '    make [TARGET TARGET ...]'
-	@echo ''
-	@echo 'TARGET can be:'
-	@echo '    image       - builds the Docker image.'
-	@echo '    release     - builds and pushes the Docker image.'
-	@echo '    clean       - gets rid of generated files and Docker resources.'
-	@echo ''
-	@echo '    docker-run  - runs Docker image (with RUN_FLAGS, if specified).'
-	@echo '    image-start - runs Docker image in background (with RUN_FLAGS, if specified).'
-	@echo '    image-stop  - stops Docker image previously started.'
-	@echo '    shell       - runs Docker image interactively with shell instead of entrypoint.'
-	@echo ''
-	@echo '    build-yaml  - interpolates variables of project in yaml files folder.'
-	@echo '    deploy      - apply resources from yaml files folder.'
-	@echo '    undeploy    - delete resources from yaml files folder.'
-	@echo '    redeploy    - just an undeploy followed by a deploy.'
-	@echo ''
-	@echo '    help        - this message.'
-	@echo ''
-
-image:
-ifeq ($(BUILD_IMAGE), true)
-	@echo 'Building image $(DOCKER_IMAGE)'
-	docker build -f $(DOCKERFILE) $(DOCKER_BUILD_ARGS) $(DOCKER_CONTEXT)
-else
-	@echo 'Using image $(DOCKER_IMAGE)'
-endif
-
-release: image
-ifeq ($(BUILD_IMAGE), true)
-	docker push $(DOCKER_IMAGE)
-endif
-
-shell: image
-	docker run -it --rm --name $(APPLICATION)-container --entrypoint /bin/sh $(ENV_FLAGS) $(DOCKER_IMAGE)
-
-docker-run: image
-	docker run --rm --name $(APPLICATION)-container $(ENV_FLAGS) $(RUN_FLAGS) $(DOCKER_IMAGE)
-
-image-start: image
-	docker run -d -t --name $(APPLICATION)-container $(ENV_FLAGS) $(RUN_FLAGS) $(DOCKER_IMAGE)
-
-image-stop: image
-	docker stop -t 1 $(APPLICATION)-container
-
-
-# Create the yaml build directory if it does not exist
-$(YAML_BUILD_DIR):
+$(YAML_BUILD_DIR): validate
 	@mkdir -p $(YAML_BUILD_DIR)
 
-build-yaml: $(YAML_BUILD_DIR)
-	@echo 'YAML files support the following vars: $(AVAILABLE_VARS)'
+build: $(YAML_BUILD_DIR)
+	@echo 'YAML available vars: $(AVAILABLE_VARS)'
 	@for file in $(YAML_FILES); do \
 		mkdir -p `dirname "$(YAML_BUILD_DIR)/$$file"` ; \
 		$(SHELL_EXPORT) envsubst <$(YAML_DIR)/$$file >$(YAML_BUILD_DIR)/$$file ;\
 	done
+	@cat $(YAML_BUILD_DIR)/.dump.yaml
 
-deploy: build-yaml
-ifeq ($(K8S_DEPLOY), false)
-	$(error '(K8S_DEPLOY=false) Configured to not deploy to Kubernetes.  Skipping.')
-else
-	@kubectx kubernetes-$(ENVIRONMENT)
-
+deploy: build
+	@kubectx $(CLUSTER)
 ifneq (,$(wildcard $(ENV_FILE)))
 	@kubectl create configmap $(APPLICATION)-config -o yaml --dry-run \
 		-n $(NAMESPACE) \
@@ -134,23 +106,17 @@ ifneq (,$(wildcard $(ENV_FILE)))
 	| kubectl apply -f -
 endif
 	@kubectl apply -f $(YAML_BUILD_DIR)
-endif
 
-undeploy: build-yaml
-ifeq ($(K8S_DEPLOY), false)
-	$(error '(K8S_DEPLOY=false) Configured to not deploy to Kubernetes.  Skipping.')
-else
-	@kubectx kubernetes-$(ENVIRONMENT)
 
-	@kubectl delete configmap $(APPLICATION)-config 2>/dev/null || true
+undeploy: build
+	@kubectx $(CLUSTER)
 	@kubectl delete -f $(YAML_BUILD_DIR) 2>/dev/null || true
-endif
+	@kubectl delete configmap $(APPLICATION)-config 2>/dev/null || true
 
 redeploy: undeploy deploy
 
-
 clean:
 	docker container rm -f $(APPLICATION)-container 2>/dev/null || true
-	docker image rm -f $(DOCKER_IMAGE) 2>/dev/null || true
+	docker image rm -f $(CONTAINER_IMAGE) 2>/dev/null || true
 	docker system prune -f 2>/dev/null || true
 	rm -rf $(YAML_BUILD_DIR)

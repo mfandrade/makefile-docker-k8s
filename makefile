@@ -7,12 +7,12 @@ include config.ini
 endif
 
 DOCKER_CONTEXT ?= .
-DOCKERFILE     ?= $(DOCKER_CONTEXT)/Dockerfile
-ENV_FILE       ?= $(DOCKER_CONTEXT)/env
+DOCKERFILE     ?= Dockerfile
+ENV_FILE       ?= env
 
 # defining CONTAINER_IMAGE
-IMAGE_NAME  ?= $(shell git remote get-url origin 2>/dev/null | sed -ne \
-			   's,\(http[s]:\/\/\|git@\)[^:/]*[:/]\(.*\)\.git$$,\2,p')
+IMAGE_NAME     := $(shell git remote get-url origin 2>/dev/null | sed -ne \
+			       's,\(http[s]:\/\/\|git@\)[^:/]*[:/]\(.*\)\.git$$,\2,p')
 ifeq ($(strip $(IMAGE_NAME)),)
 $(error 'IMAGE_NAME is undefined.  Please clone a remote git repo.')
 endif
@@ -65,7 +65,6 @@ shell: image ## runs Docker image interactively with shell instead of entrypoint
 
 # -----------------------------------------------------------------------------
 NAMESPACE         ?= $(APPLICATION)
-APPLICATION_URL   ?= $(APPLICATION).trt8.jus.br
 APPLICATION_PATH  ?= /
 
 YAML_DIR       := ./yaml
@@ -86,6 +85,9 @@ endif
 # TODO talvez pegar o namespace do dir acima da imagem
 ifndef CONTAINER_PORT
 $(error CONTAINER_PORT is undefined.)
+endif
+ifndef APPLICATION_URL
+$(error APPLICATION_URL is undefined.)
 endif
 
 $(YAML_BUILD_DIR): validate
